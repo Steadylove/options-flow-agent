@@ -1,0 +1,14 @@
+{
+  "name": "options-flow-agent",
+  "version": "0.1.0",
+  "description": "用 Node Agent 把异常期权流收成可复现的研究简报",
+  "type": "module",
+  "private": false,
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "brief": "node src/cli.js"
+  }
+}
