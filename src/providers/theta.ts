@@ -1,4 +1,5 @@
 import { normalizeTicker } from "../ticker.js";
+import { mapThetaSnapshots } from "./theta-map.js";
 import type { OptionsDataProvider, OptionsSummary } from "./types.js";
 
 /**
@@ -11,8 +12,9 @@ import type { OptionsDataProvider, OptionsSummary } from "./types.js";
  * 本地 REST 按官方示例是不带 Authorization 的 GET。本进程只检查环境变量里有没有凭证，
  * 不会把密钥放进 URL，也不会写 creds.txt。
  *
- * Options Value 档位可用的快照：ohlc、quote、open_interest。
- * trade 快照是 Standard 档，这里不调用。
+ * Options Value 档位用来拼简报的快照：option ohlc、quote、open_interest，以及 stock ohlc（标的价）。
+ * trade、implied volatility、greeks 是更高档，这里不调用。
+ * 映射在 theta-map.ts。连不上或形状不符时直接失败，不退回 Mock。
  */
 export const DEFAULT_THETADATA_BASE_URL = "http://127.0.0.1:25503/v3";
 
@@ -23,6 +25,10 @@ const VALUE_SNAPSHOT_PATHS = {
 } as const;
 
 export type ThetaSnapshotKind = keyof typeof VALUE_SNAPSHOT_PATHS;
+
+const STOCK_OHLC_PATH = "/stock/snapshot/ohlc";
+
+export type ThetaFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 export interface ThetaCredentials {
   apiKey?: string;
@@ -67,39 +73,52 @@ export function buildThetaUrl(
 export class ThetaProvider implements OptionsDataProvider {
   readonly name = "theta";
   private readonly baseUrl: string;
+  private readonly fetchImpl: ThetaFetch;
 
-  constructor(config: ThetaConfig) {
+  constructor(config: ThetaConfig, fetchImpl: ThetaFetch = fetch) {
     assertThetaCredentials(config.credentials);
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
+    this.fetchImpl = fetchImpl;
   }
 
   async fetchSummary(ticker: string): Promise<OptionsSummary> {
     const symbol = normalizeTicker(ticker);
-    const body = await this.getSnapshot("ohlc", symbol);
-    throw new Error(
-      `ThetaData 已返回 ${symbol} 的 option/snapshot/ohlc（${body.length} 字节），但骨架还不会把它映射成 OptionsSummary。请改用 OPTIONS_DATA_PROVIDER=mock。`,
-    );
+    const [ohlc, quote] = await Promise.all([
+      this.getSnapshot("ohlc", symbol),
+      this.getSnapshot("quote", symbol),
+    ]);
+    const [openInterest, underlying] = await Promise.all([
+      this.getSnapshot("openInterest", symbol),
+      this.getText(STOCK_OHLC_PATH, { symbol, format: "json" }),
+    ]);
+    return mapThetaSnapshots({
+      ticker: symbol,
+      ohlc: parseJson(ohlc, VALUE_SNAPSHOT_PATHS.ohlc),
+      quote: parseJson(quote, VALUE_SNAPSHOT_PATHS.quote),
+      openInterest: parseJson(openInterest, VALUE_SNAPSHOT_PATHS.openInterest),
+      underlying: parseJson(underlying, STOCK_OHLC_PATH),
+    });
   }
 
   async getSnapshot(kind: ThetaSnapshotKind, symbol: string): Promise<string> {
     const path = VALUE_SNAPSHOT_PATHS[kind];
-    const url = buildThetaUrl(this.baseUrl, path, {
-      symbol,
-      expiration: "*",
-      format: "json",
-    });
+    return this.getText(path, { symbol, expiration: "*", format: "json" });
+  }
+
+  private async getText(path: string, params: Record<string, string>): Promise<string> {
+    const url = buildThetaUrl(this.baseUrl, path, params);
     let response: Response;
     try {
-      response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+      response = await this.fetchImpl(url, { signal: AbortSignal.timeout(60_000) });
     } catch (error) {
       throw new Error(
-        `无法连接 ThetaData REST（${this.baseUrl}）。请确认 Theta Terminal v3 已用同一套凭证启动。${errorDetail(error)}`,
+        `无法连接 ThetaData REST（${this.baseUrl}）。请确认 Theta Terminal v3 已用同一套凭证启动。不会改用 Mock。${errorDetail(error)}`,
       );
     }
     if (!response.ok) {
       const body = await response.text();
       throw new Error(
-        `ThetaData 请求失败（${response.status}）${path}：${body.slice(0, 300)}`,
+        `ThetaData 请求失败（${response.status}）${path}：${body.slice(0, 300)}。不会改用 Mock。`,
       );
     }
     return response.text();
@@ -121,6 +140,14 @@ function readCredentials(env: NodeJS.ProcessEnv): ThetaCredentials {
 function assertThetaCredentials(credentials: ThetaCredentials): void {
   if (credentials.apiKey || (credentials.username && credentials.password)) return;
   throw new Error(missingThetaCredentialsMessage());
+}
+
+function parseJson(body: string, endpoint: string): unknown {
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    throw new Error(`ThetaData ${endpoint} 返回的不是 JSON。不会改用 Mock。`);
+  }
 }
 
 function errorDetail(error: unknown): string {
