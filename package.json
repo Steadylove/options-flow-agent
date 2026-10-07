@@ -3,12 +3,23 @@
   "version": "0.1.0",
   "description": "用 Node Agent 把异常期权流收成可复现的研究简报",
   "type": "module",
-  "private": false,
   "license": "MIT",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "brief": "node src/cli.js"
+    "brief": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "tsx": "^4.20.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
   }
 }
