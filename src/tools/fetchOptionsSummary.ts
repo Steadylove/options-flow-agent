@@ -27,7 +27,7 @@ export function createFetchOptionsSummaryTool(
   return {
     name: "fetchOptionsSummary",
     description:
-      "按 ticker 拉取期权流摘要。Week1 数据来自 MockProvider，返回标的、时间窗和合约列表。不要编造行情，必须调用此工具。",
+      "按 ticker 拉取期权流摘要。默认来自 MockProvider；OPTIONS_DATA_PROVIDER=theta 时来自 ThetaProvider。不要编造行情，必须调用此工具。",
     parameters: inputSchema,
     jsonSchema,
     execute: async (input) => {

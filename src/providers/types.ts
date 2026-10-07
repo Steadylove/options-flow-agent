@@ -26,7 +26,7 @@ export const optionsSummarySchema = z.object({
   asOf: z.string().datetime(),
   window: z.string().min(1),
   underlyingPrice: z.number().positive(),
-  source: z.literal("mock"),
+  source: z.enum(["mock", "theta"]),
   contracts: z.array(optionContractSchema).min(1),
 });
 
@@ -35,7 +35,7 @@ export type FlowSide = z.infer<typeof flowSideSchema>;
 export type OptionContract = z.infer<typeof optionContractSchema>;
 export type OptionsSummary = z.infer<typeof optionsSummarySchema>;
 
-/** Week1 只有 MockProvider。接口留好，真实数据源不在本周范围。 */
+/** 行情来源。Week1 默认 Mock；ThetaData 由 OPTIONS_DATA_PROVIDER=theta 显式打开。 */
 export interface OptionsDataProvider {
   readonly name: string;
   fetchSummary(ticker: string): Promise<OptionsSummary>;

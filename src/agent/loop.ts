@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MockProvider } from "../providers/mock.js";
+import { createOptionsDataProvider } from "../providers/index.js";
 import { optionsSummarySchema } from "../providers/types.js";
 import { flowAnalysisSchema } from "../tools/analyzeFlow.js";
 import { createTools, requireTool } from "../tools/index.js";
@@ -41,18 +41,23 @@ type ChatMessage =
 export interface AgentResult {
   outputPath: string;
   mode: "deterministic" | "llm";
+  provider: string;
 }
 
 export async function runAgent(options: { ticker: string }): Promise<AgentResult> {
-  const tools = createTools(new MockProvider());
+  const provider = createOptionsDataProvider();
+  const tools = createTools(provider);
   const apiKey = process.env.LITELLM_API_KEY?.trim();
   if (!apiKey) {
-    return runDeterministic(tools, options.ticker);
+    return { ...(await runDeterministic(tools, options.ticker)), provider: provider.name };
   }
-  return runLlm(tools, options.ticker, apiKey);
+  return { ...(await runLlm(tools, options.ticker, apiKey)), provider: provider.name };
 }
 
-async function runDeterministic(tools: AgentTool[], ticker: string): Promise<AgentResult> {
+async function runDeterministic(
+  tools: AgentTool[],
+  ticker: string,
+): Promise<Omit<AgentResult, "provider">> {
   const summary = optionsSummarySchema.parse(
     await callTool(requireTool(tools, "fetchOptionsSummary"), { ticker }),
   );
@@ -83,7 +88,11 @@ function liteLlmConfig(apiKey: string): { url: string; apiKey: string; model: st
   };
 }
 
-async function runLlm(tools: AgentTool[], ticker: string, apiKey: string): Promise<AgentResult> {
+async function runLlm(
+  tools: AgentTool[],
+  ticker: string,
+  apiKey: string,
+): Promise<Omit<AgentResult, "provider">> {
   const config = liteLlmConfig(apiKey);
   const messages: ChatMessage[] = [
     {

@@ -1,10 +1,12 @@
-import { runAgent } from "./agent/loop.js";
+import { runAgent, type AgentResult } from "./agent/loop.js";
+import { loadDotEnv } from "./env.js";
 import { normalizeTicker } from "./ticker.js";
 
 const USAGE = `用法：pnpm brief --ticker TQQQ
 
-从 MockProvider 读取期权流样本，写出 output/<TICKER>-options-brief.md。
-未设置 LITELLM_API_KEY 时按固定顺序调用三个 tool，不访问网络。`;
+默认 OPTIONS_DATA_PROVIDER=mock：从 MockProvider 读取样本，写出 output/<TICKER>-options-brief.md。
+未设置 LITELLM_API_KEY 时按固定顺序调用三个 tool，不访问网络。
+OPTIONS_DATA_PROVIDER=theta 时改用 ThetaData；没有凭证会直接失败，不会退回 mock。`;
 
 interface CliArgs {
   help: boolean;
@@ -36,7 +38,15 @@ export function parseArgs(argv: string[]): CliArgs {
   return { help: false, ticker: normalizeTicker(raw) };
 }
 
+function formatMode(result: AgentResult): string {
+  if (result.provider === "mock") {
+    return result.mode === "deterministic" ? "离线 Mock（未设置 LITELLM_API_KEY）" : "LiteLLM";
+  }
+  return result.mode === "deterministic" ? "ThetaData（未设置 LITELLM_API_KEY）" : "LiteLLM + ThetaData";
+}
+
 async function main(): Promise<void> {
+  loadDotEnv();
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !args.ticker) {
     console.log(USAGE);
@@ -44,9 +54,7 @@ async function main(): Promise<void> {
   }
 
   const result = await runAgent({ ticker: args.ticker });
-  const mode =
-    result.mode === "deterministic" ? "离线 Mock（未设置 LITELLM_API_KEY）" : "LiteLLM";
-  console.log(`模式：${mode}`);
+  console.log(`模式：${formatMode(result)}`);
   console.log(`已写入 ${result.outputPath}`);
 }
 
