@@ -1,0 +1,67 @@
+{
+ "response": [
+  {
+   "contract": {
+    "strike": 65.0,
+    "right": "PUT",
+    "expiration": "2026-10-12",
+    "symbol": "TQQQ"
+   },
+   "data": [
+    {
+     "ask_size": 1,
+     "bid_size": 0,
+     "ask_exchange": 5,
+     "ask_condition": 50,
+     "bid_exchange": 5,
+     "ask": 0.05,
+     "bid": 0.0,
+     "bid_condition": 50,
+     "timestamp": "2026-10-07T15:57:36.366"
+    }
+   ]
+  },
+  {
+   "contract": {
+    "strike": 81.0,
+    "right": "PUT",
+    "expiration": "2026-10-12",
+    "symbol": "TQQQ"
+   },
+   "data": [
+    {
+     "ask_size": 88,
+     "bid_size": 674,
+     "ask_exchange": 43,
+     "ask_condition": 50,
+     "bid_exchange": 43,
+     "ask": 0.6,
+     "bid": 0.52,
+     "bid_condition": 50,
+     "timestamp": "2026-10-07T15:59:59.945"
+    }
+   ]
+  },
+  {
+   "contract": {
+    "strike": 81.0,
+    "right": "CALL",
+    "expiration": "2026-10-12",
+    "symbol": "TQQQ"
+   },
+   "data": [
+    {
+     "ask_size": 228,
+     "bid_size": 658,
+     "ask_exchange": 43,
+     "ask_condition": 50,
+     "bid_exchange": 5,
+     "ask": 3.4,
+     "bid": 2.9,
+     "bid_condition": 50,
+     "timestamp": "2026-10-07T15:59:59.949"
+    }
+   ]
+  }
+ ]
+}

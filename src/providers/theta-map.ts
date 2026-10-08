@@ -16,8 +16,12 @@ const ohlcSchema = z.object({
   strike: z.number().positive(),
   right: z.string().min(1),
   timestamp: z.string().min(1),
+  open: z.number().nonnegative().optional(),
+  high: z.number().nonnegative().optional(),
+  low: z.number().nonnegative().optional(),
   close: z.number().nonnegative(),
   volume: z.number().nonnegative(),
+  vwap: z.number().positive().optional(),
 });
 
 const quoteSchema = z.object({
@@ -37,12 +41,6 @@ const openInterestSchema = z.object({
   open_interest: z.number().nonnegative(),
 });
 
-const stockSchema = z.object({
-  symbol: z.string().min(1),
-  close: z.number(),
-  timestamp: z.string().min(1),
-});
-
 type OhlcRow = z.infer<typeof ohlcSchema>;
 type QuoteRow = z.infer<typeof quoteSchema>;
 type OpenInterestRow = z.infer<typeof openInterestSchema>;
@@ -53,7 +51,11 @@ interface Draft {
   strike: number;
   right: OptionRight;
   timestamp: string;
+  open?: number;
+  high?: number;
+  low?: number;
   close: number;
+  vwap?: number;
   volume: number;
   bid?: number;
   ask?: number;
@@ -65,7 +67,8 @@ export interface ThetaSnapshotPayloads {
   ohlc: unknown;
   quote: unknown;
   openInterest: unknown;
-  underlying: unknown;
+  underlyingPrice: number;
+  underlyingPriceNote: string;
 }
 
 export function mapThetaSnapshots(input: ThetaSnapshotPayloads): OptionsSummary {
@@ -89,12 +92,24 @@ export function mapThetaSnapshots(input: ThetaSnapshotPayloads): OptionsSummary 
   if (ohlcRows.length === 0) {
     throw new Error("ThetaData option/snapshot/ohlc 没有返回该标的的合约。不会改用 Mock。");
   }
+  if (!(input.underlyingPrice > 0)) {
+    throw new Error("标的价格无效。不会改用 Mock。");
+  }
+
+  const stamped = ohlcRows.map((row) => {
+    const timestamp = toIsoDateTime(row.timestamp);
+    return { row, timestamp, session: sessionDate(timestamp) };
+  });
+  const latestSession = stamped.map((row) => row.session).sort().at(-1);
+  const currentRows = stamped.filter((row) => row.session === latestSession);
+  if (!latestSession || currentRows.length === 0) {
+    throw new Error("ThetaData option/snapshot/ohlc 没有最新交易日的成交。不会改用 Mock。");
+  }
 
   const drafts = new Map<string, Draft>();
-  for (const row of ohlcRows) {
+  for (const { row, timestamp } of currentRows) {
     const identity = identityOf(row);
     const current = drafts.get(identity.key);
-    const timestamp = toIsoDateTime(row.timestamp);
     if (current && current.timestamp > timestamp) continue;
     drafts.set(identity.key, {
       symbol: ticker,
@@ -102,7 +117,11 @@ export function mapThetaSnapshots(input: ThetaSnapshotPayloads): OptionsSummary 
       strike: row.strike,
       right: identity.right,
       timestamp,
+      open: row.open,
+      high: row.high,
+      low: row.low,
       close: row.close,
+      vwap: row.vwap,
       volume: Math.round(row.volume),
       bid: current?.bid,
       ask: current?.ask,
@@ -139,7 +158,8 @@ export function mapThetaSnapshots(input: ThetaSnapshotPayloads): OptionsSummary 
     ticker,
     asOf: latest,
     window: formatEtWindow(latest),
-    underlyingPrice: pickUnderlying(input.underlying, ticker),
+    underlyingPrice: input.underlyingPrice,
+    underlyingPriceNote: input.underlyingPriceNote,
     source: "theta",
     contracts,
   });
@@ -194,23 +214,6 @@ function parseRows<T>(
   });
 }
 
-function pickUnderlying(payload: unknown, ticker: string): number {
-  const rows = parseRows(
-    flattenThetaResponse(payload, "stock/snapshot/ohlc"),
-    stockSchema,
-    "stock/snapshot/ohlc",
-  );
-  const matches = rows.filter((row) => row.symbol.toUpperCase() === ticker && row.close > 0);
-  const priced = (matches.length > 0 ? matches : rows.filter((row) => row.close > 0)).sort((a, b) =>
-    toIsoDateTime(b.timestamp).localeCompare(toIsoDateTime(a.timestamp)),
-  );
-  const latest = priced[0];
-  if (!latest) {
-    throw new Error("ThetaData stock/snapshot/ohlc 没有给出正的标的价格。不会改用 Mock。");
-  }
-  return latest.close;
-}
-
 function identityOf(row: { symbol: string; expiration: string; strike: number; right: string }): {
   key: string;
   expiration: string;
@@ -235,7 +238,7 @@ function toContract(draft: Draft): OptionContract {
       : openInterest === 0
         ? draft.volume
         : round2(draft.volume / openInterest);
-  const premium = Math.round(draft.volume * ((bid + ask) / 2) * 100);
+  const premium = Math.round(draft.volume * estimateTradePrice(draft, bid, ask) * 100);
   const strikeLabel = Number.isInteger(draft.strike) ? String(draft.strike) : draft.strike.toFixed(1);
   const rightLabel = draft.right === "call" ? "C" : "P";
   return {
@@ -255,6 +258,34 @@ function toContract(draft: Draft): OptionContract {
     side: "unknown",
     sweep: false,
   };
+}
+
+function estimateTradePrice(draft: Draft, bid: number, ask: number): number {
+  if (draft.vwap !== undefined && draft.vwap > 0) return draft.vwap;
+  const { open, high, low, close } = draft;
+  if (
+    open !== undefined &&
+    high !== undefined &&
+    low !== undefined &&
+    open > 0 &&
+    high > 0 &&
+    low > 0 &&
+    close > 0
+  ) {
+    return (open + high + low + close) / 4;
+  }
+  if (close > 0) return close;
+  const mid = (bid + ask) / 2;
+  return mid > 0 ? mid : close;
+}
+
+function sessionDate(iso: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: EASTERN,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(iso));
 }
 
 function normalizeExpiry(raw: string): string {

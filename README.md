@@ -88,16 +88,23 @@ cp .env.example .env
 | 本机 Terminal（默认） | `http://127.0.0.1:25503/v3` |
 | 本机 staging Terminal | `http://127.0.0.1:25504/v3` |
 
-`OPTIONS_DATA_PROVIDER=theta` 时，`fetchOptionsSummary` 会请求 Options Value 档位的四条快照，再映射成和 Mock 相同的 `OptionsSummary`：
+`OPTIONS_DATA_PROVIDER=theta` 时，`fetchOptionsSummary` 会请求 Options Value 档位的三条期权快照，再映射成和 Mock 相同的 `OptionsSummary`。标的价不走 Theta 的股票快照：实测账号是 Options VALUE、Stock FREE，`/stock/snapshot/ohlc`（以及股票 quote、股票 history ohlc）会返回 403。
 
 | 用途 | 路径 |
 | --- | --- |
-| 成交量、最新价 | `GET /option/snapshot/ohlc?symbol=TQQQ&expiration=*&format=json` |
+| 成交量、OHLC | `GET /option/snapshot/ohlc?symbol=TQQQ&expiration=*&format=json` |
 | 买卖价 | `GET /option/snapshot/quote` |
 | 未平仓 | `GET /option/snapshot/open_interest` |
-| 标的价格 | `GET /stock/snapshot/ohlc?symbol=TQQQ&format=json` |
+| 标的价（默认） | Yahoo `GET /v8/finance/chart/{ticker}?interval=1m&range=1d`，先 `query1.finance.yahoo.com`，再 `query2`。读 `regularMarketPrice` 与 `regularMarketTime`。不需要密钥 |
+| 标的价（回退） | `GET /stock/history/eod?symbol=TQQQ&start_date=YYYYMMDD&end_date=YYYYMMDD&format=json`。FREE 档可用，取最后一根日线的 `close`。行里没有 `symbol` 或 `timestamp`，用 `last_trade` 标日期 |
 
-JSON 形状是文档里的 `{ response: [{ contract, data }] }`。合约按到期日、行权价和方向拼到一起，权利金用买卖价中价；没有报价时用 OHLC 的 close。Value 档没有 trade，所以方向是「不明」、扫单是「否」，异常规则仍只看成交量和 Vol/OI。隐含波动率和 delta 属于 Standard 及以上，这里填 0，简报启发式不用它们。请求按两批发出，避开 Value 档同时 2 个并发的限制。`trade` 与 greeks 端点不调用。
+`UNDERLYING_PRICE_SOURCE=yahoo`（默认，或留空）先问 Yahoo，失败再用 EOD。设成 `theta-eod` 则只读免费日线。两边都失败时进程以非 0 退出，说明原因，不会改回 Mock。简报标的价一行会写明来源和时间，例如 `标的价格：83.62（Yahoo 实时/延迟 16:00 ET）` 或 `标的价格：84.25（Theta 日线收盘 2026-10-06）`。Mock 简报不带这个括号。
+
+OHLC 快照给的是每张合约最后一根成交 K 线，日期可以早于最新交易日。映射只保留时间戳所在美东日期等于这批数据里最新交易日的行，更早的成交量不计入当日。
+
+权利金估算（只用于 Theta；Mock 仍是成交量 × 买卖中价 × 100）：有正的 OHLC `vwap` 就用它，否则用正的 `(open + high + low + close) / 4`，再否则用 `close`，最后才用买卖中价。Value 档的收盘买卖价经常不能代表当日成交。
+
+JSON 形状是文档里的 `{ response: [{ contract, data }] }`。合约按到期日、行权价和方向拼到一起。Value 档没有 trade，所以方向是「不明」、扫单是「否」，异常规则仍只看成交量和 Vol/OI。隐含波动率和 delta 属于 Standard 及以上，这里填 0，简报启发式不用它们。期权快照按两批发出，避开 Value 档同时 2 个并发的限制。`trade` 与 greeks 端点不调用，付费的 `/stock/snapshot/ohlc` 也不调用。
 
 认证发生在 Terminal 启动时，不在每一条本地 GET 上。两种官方方式，都只放在 `.env`，不要写进仓库：
 
@@ -114,7 +121,7 @@ pnpm brief --ticker TQQQ
 
 没配凭证、Terminal 连不上，或 JSON 对不上上述形状时，进程以非 0 退出并说明原因。它不会悄悄改回 Mock。把 `OPTIONS_DATA_PROVIDER` 留空或设回 `mock`，离线简报仍然可用。
 
-不启动 Terminal 也能检查映射。`src/providers/fixtures/theta-value.ts` 是按文档形状记下来的样本：
+不启动 Terminal 也能检查映射。`src/providers/fixtures/theta-value.ts` 是按文档形状记下来的样本；`src/providers/fixtures/live/` 是一次实盘响应的小样本（含股票快照 403 正文和免费 EOD）。测试里的 Yahoo 响应用假的 `fetch`，不访问网络：
 
 ```bash
 pnpm test
@@ -142,7 +149,9 @@ OPTIONS_DATA_PROVIDER=theta pnpm brief --ticker TQQQ
 │   │   ├── theta.ts                    # ThetaProvider：Value 快照映射成摘要
 │   │   ├── theta-map.ts                # 纯映射，fixture 测试不连 Terminal
 │   │   ├── fixtures/theta-value.ts     # 记录的 Theta JSON 形状
+│   │   ├── fixtures/live/              # 实盘小样本：期权快照、403、免费 EOD
 │   │   └── index.ts                    # mock | theta 工厂
+│   ├── underlying/price.ts             # Yahoo 图表，失败再用 Theta 免费日线
 │   └── tools/                          # fetchOptionsSummary / analyzeFlow / writeBrief
 ├── output/                             # 生成的 Markdown（*.md 不入库）
 ├── .env.example                        # 数据源与可选密钥的名字，值为空
@@ -155,7 +164,7 @@ OPTIONS_DATA_PROVIDER=theta pnpm brief --ticker TQQQ
 ## Roadmap
 
 1. **Week1 MVP** — TypeScript、MockProvider、三个 tool、离线 Agent 路径，输出含异常合约表和 3 条观察的 Markdown。当前仓库就是这一步。
-2. **ThetaData** — Options Value 的快照已经映射成同一份 `OptionsSummary`，默认仍是 Mock。扫单和希腊值不在该档。密钥只放环境变量。
+2. **ThetaData** — Options Value 的期权快照已经映射成同一份 `OptionsSummary`。标的价默认来自 Yahoo，失败再用免费日线。默认数据源仍是 Mock。扫单和希腊值不在该档。密钥只放环境变量。
 3. **Code Mode** — 在固定 tool 之外提供受控的临时代码执行。Week1 不做。
 4. **Demo 录屏** — 录下从输入 ticker 到落盘简报的一次完整运行。
 

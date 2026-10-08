@@ -103,6 +103,7 @@ export const tqqqOpenInterest = {
   ],
 };
 
+/** 付费 stock snapshot 的形状。Stock 为 FREE 时该端点返回 403，映射不再读取它。 */
 export const tqqqUnderlying = {
   response: [
     {
