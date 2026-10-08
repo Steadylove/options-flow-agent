@@ -14,13 +14,24 @@ const SWEEP_VOL_OI = 1.5;
 const SWEEP_WEIGHT = 1.25;
 const PER_SIDE = 3;
 
+export const DEFAULT_MIN_OPEN_INTEREST = 500;
+
 export interface AnalyzeOptions {
   includeZeroDte?: boolean;
+  minOpenInterest?: number;
 }
 
 export function readIncludeZeroDte(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env.INCLUDE_0DTE?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
+}
+
+export function readMinOpenInterest(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return DEFAULT_MIN_OPEN_INTEREST;
+  if (!/^\d+$/.test(raw.trim())) {
+    throw new Error(`MIN_OPEN_INTEREST 必须是非负整数，收到 ${raw}。不会改用 Mock。`);
+  }
+  return Number(raw.trim());
 }
 
 export const scoredContractSchema = optionContractSchema.extend({
@@ -76,67 +87,119 @@ function sumPremium(contracts: ScoredContract[], right: "call" | "put"): number 
     .reduce((total, contract) => total + contract.premium, 0);
 }
 
-function biasSentence(contracts: ScoredContract[]): string {
-  const callPremium = sumPremium(contracts, "call");
-  const putPremium = sumPremium(contracts, "put");
-  if (callPremium === putPremium) {
-    return `入选异常合约的看涨与看跌权利金同为 ${fmtUsd(callPremium)}，方向中性。`;
-  }
-  if (callPremium > putPremium) {
-    return `入选异常合约的看涨权利金 ${fmtUsd(callPremium)}，看跌 ${fmtUsd(putPremium)}，权利金净偏多。`;
-  }
-  return `入选异常合约的看跌权利金 ${fmtUsd(putPremium)}，看涨 ${fmtUsd(callPremium)}，权利金净偏空。`;
+interface SideTotals {
+  callVolume: number;
+  putVolume: number;
+  callPremium: number;
+  putPremium: number;
 }
 
-function sessionClause(summary: OptionsSummary): string {
-  if (summary.source !== "theta") return "";
-  let callVolume = 0;
-  let putVolume = 0;
-  let callPremium = 0;
-  let putPremium = 0;
-  for (const contract of summary.contracts) {
+function sideTotals(contracts: OptionContract[]): SideTotals {
+  const totals: SideTotals = { callVolume: 0, putVolume: 0, callPremium: 0, putPremium: 0 };
+  for (const contract of contracts) {
     if (contract.right === "call") {
-      callVolume += contract.volume;
-      callPremium += contract.premium;
+      totals.callVolume += contract.volume;
+      totals.callPremium += contract.premium;
     } else {
-      putVolume += contract.volume;
-      putPremium += contract.premium;
+      totals.putVolume += contract.volume;
+      totals.putPremium += contract.premium;
     }
   }
-  return `全场成交看涨 ${fmtInt(callVolume)} 张（${fmtUsd(callPremium)}），看跌 ${fmtInt(putVolume)} 张（${fmtUsd(putPremium)}）。`;
+  return totals;
 }
 
-function zeroDteClause(zeroDte: ScoredContract[]): string {
-  if (zeroDte.length === 0) return "";
-  const calls = zeroDte.filter((contract) => contract.right === "call").length;
-  const puts = zeroDte.filter((contract) => contract.right === "put");
-  const lead = zeroDte[0];
-  const leadPut = puts[0];
-  const leadText = lead
-    ? `最突出的是 ${lead.contract}（成交 ${fmtInt(lead.volume)}，Vol/OI ${lead.volumeOiRatio.toFixed(2)}，权利金 ${fmtUsd(lead.premium)}）`
-    : "没有可点名的合约";
-  const putText = leadPut
-    ? `；看跌一侧最突出的是 ${leadPut.contract}（成交 ${fmtInt(leadPut.volume)}，Vol/OI ${leadPut.volumeOiRatio.toFixed(2)}，权利金 ${fmtUsd(leadPut.premium)}）`
-    : "";
-  return `另有 ${zeroDte.length} 张当日到期合约达到阈值（看涨 ${calls}、看跌 ${puts.length}），默认不参与排名，因为到期日 Vol/OI 容易偏高；${leadText}${putText}。INCLUDE_0DTE=1 或 --include-0dte 可纳入。`;
+function formatBook(totals: SideTotals): string {
+  return `看涨 ${fmtInt(totals.callVolume)} 张（${fmtUsd(totals.callPremium)}），看跌 ${fmtInt(totals.putVolume)} 张（${fmtUsd(totals.putPremium)}）`;
+}
+
+function sessionClause(summary: OptionsSummary, day: string): string {
+  if (summary.source !== "theta") return "";
+  const hasZeroDte = summary.contracts.some((contract) => contract.expiry === day);
+  const all = sideTotals(summary.contracts);
+  if (!hasZeroDte) return `全场：${formatBook(all)}。`;
+  const later = sideTotals(summary.contracts.filter((contract) => contract.expiry !== day));
+  return `全场含当日到期：${formatBook(all)}。不含当日到期：${formatBook(later)}。`;
+}
+
+function concentrationClause(contracts: ScoredContract[], label: "看涨" | "看跌"): string {
+  if (contracts.length === 0) return "";
+  const total = contracts.reduce((sum, contract) => sum + contract.premium, 0);
+  const top = [...contracts].sort((a, b) => b.premium - a.premium || a.contract.localeCompare(b.contract))[0];
+  if (!top || top.premium * 2 <= total) return "";
+  if (contracts.length === 1) return `${label}权利金全部来自 ${top.contract}。`;
+  const pct = Math.round((top.premium * 100) / total);
+  return `${top.contract} 占${label}权利金 ${pct}%。`;
+}
+
+function directionSentence(contracts: ScoredContract[]): string {
+  const calls = contracts.filter((contract) => contract.right === "call");
+  const puts = contracts.filter((contract) => contract.right === "put");
+  const callPremium = sumPremium(contracts, "call");
+  const putPremium = sumPremium(contracts, "put");
+  const scope = `全部 ${contracts.length} 张达标合约（看涨 ${calls.length} 张、看跌 ${puts.length} 张）`;
+  const money = `看涨权利金 ${fmtUsd(callPremium)}，看跌 ${fmtUsd(putPremium)}`;
+  const premiumLean = Math.sign(callPremium - putPremium);
+  const countLean = Math.sign(calls.length - puts.length);
+  let tone: string;
+  if (premiumLean === 0) {
+    tone = "权利金相当，方向中性";
+  } else if (countLean === 0) {
+    tone = premiumLean > 0 ? "张数相当、权利金偏多" : "张数相当、权利金偏空";
+  } else if (premiumLean === countLean) {
+    tone = premiumLean > 0 ? "张数与权利金都偏多" : "张数与权利金都偏空";
+  } else {
+    const countWord = countLean > 0 ? "张数偏多" : "张数偏空";
+    const premiumWord = premiumLean > 0 ? "权利金偏多" : "权利金偏空";
+    tone = `${countWord}、${premiumWord}，方向混杂`;
+  }
+  const heavier = premiumLean > 0 ? concentrationClause(calls, "看涨") : premiumLean < 0 ? concentrationClause(puts, "看跌") : "";
+  return `${scope}：${money}。${tone}。${heavier}`;
+}
+
+function expirySentence(table: ScoredContract[], qualifyingCount: number): string {
+  const byExpiry = new Map<string, number>();
+  for (const contract of table) {
+    byExpiry.set(contract.expiry, (byExpiry.get(contract.expiry) ?? 0) + 1);
+  }
+  const top = [...byExpiry.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+  if (!top) throw new Error("异常合约分组为空");
+  const scope =
+    table.length === qualifyingCount
+      ? `表内 ${table.length} 张，即全部达标合约`
+      : `表内 ${table.length} 张，全部 ${qualifyingCount} 张达标合约里只展示了这些`;
+  return `${scope}。到期最集中在 ${top[0]}（${top[1]} 张）。`;
+}
+
+function exclusionNotes(zeroDteCount: number, lowOiCount: number, minOi: number): string {
+  const notes: string[] = [];
+  if (zeroDteCount > 0) notes.push(`另有 ${zeroDteCount} 张当日到期达标，未进排名。`);
+  if (lowOiCount > 0) notes.push(`另有 ${lowOiCount} 张因未平仓低于 ${fmtInt(minOi)} 未入排名。`);
+  return notes.join("");
+}
+
+function leadSentence(lead: ScoredContract): string {
+  const side = lead.side === "buy" ? "买入" : lead.side === "sell" ? "卖出" : "方向不明";
+  const sweep = lead.sweep ? "是扫单" : "不是扫单";
+  return `表内最突出的是 ${lead.contract}：成交 ${fmtInt(lead.volume)}，未平仓 ${fmtInt(lead.openInterest)}，Vol/OI ${lead.volumeOiRatio.toFixed(2)}，权利金 ${fmtUsd(lead.premium)}，记为${side}，${sweep}。`;
 }
 
 function buildObservations(
   unusual: ScoredContract[],
   qualifying: ScoredContract[],
-  zeroDte: ScoredContract[],
+  zeroDteCount: number,
+  lowOiCount: number,
+  minOi: number,
   summary: OptionsSummary,
+  day: string,
 ): [string, string, string] {
-  const session = sessionClause(summary);
+  const session = sessionClause(summary, day);
+  const excluded = exclusionNotes(zeroDteCount, lowOiCount, minOi);
   if (unusual.length === 0) {
-    if (zeroDte.length > 0) {
-      const lead = zeroDte[0];
+    if (zeroDteCount > 0 || lowOiCount > 0) {
       return [
-        `达到阈值的合约都在当日到期，默认不放进异常表。${session}`,
-        zeroDteClause(zeroDte),
-        lead
-          ? `若要把当日到期算进排名，看 ${lead.contract}。到期日的 Vol/OI 天然偏高，不宜单独当成方向。`
-          : "到期日的 Vol/OI 天然偏高，不宜单独当成方向。",
+        `没有计入排名的达标合约。${session}`,
+        `${excluded}到期日的 Vol/OI、以及很小的未平仓，都不单独当成方向。`,
+        "异常表为空，没有表内第一名。",
       ];
     }
     const busiest = [...summary.contracts].sort((a, b) => b.volume - a.volume)[0];
@@ -150,33 +213,13 @@ function buildObservations(
     ];
   }
 
-  const bias = `${biasSentence(qualifying)}${session}`;
-
-  const byExpiry = new Map<string, { count: number; premium: number }>();
-  for (const contract of unusual) {
-    const current = byExpiry.get(contract.expiry) ?? { count: 0, premium: 0 };
-    current.count += 1;
-    current.premium += contract.premium;
-    byExpiry.set(contract.expiry, current);
-  }
-  const topExpiry = [...byExpiry.entries()].sort(
-    (a, b) => b[1].count - a[1].count || b[1].premium - a[1].premium,
-  )[0];
-  if (!topExpiry) {
-    throw new Error("异常合约分组为空");
-  }
-  const excluded = zeroDteClause(zeroDte);
-  const cluster = `按张数，异常流最多落在 ${topExpiry[0]}（${topExpiry[1].count}/${unusual.length}）；该期限权利金合计 ${fmtUsd(topExpiry[1].premium)}。${excluded}`;
-
   const lead = unusual[0];
-  if (!lead) {
-    throw new Error("异常合约列表为空");
-  }
-  const side = lead.side === "buy" ? "买入" : lead.side === "sell" ? "卖出" : "方向不明";
-  const sweep = lead.sweep ? "是扫单" : "不是扫单";
-  const leadText = `最突出的是 ${lead.contract}：成交 ${fmtInt(lead.volume)}，未平仓 ${fmtInt(lead.openInterest)}，Vol/OI ${lead.volumeOiRatio.toFixed(2)}，权利金 ${fmtUsd(lead.premium)}，记为${side}，${sweep}。`;
-
-  return [bias, cluster, leadText];
+  if (!lead) throw new Error("异常合约列表为空");
+  return [
+    `${directionSentence(qualifying)}${session}`,
+    `${expirySentence(unusual, qualifying.length)}${excluded}`,
+    leadSentence(lead),
+  ];
 }
 
 function byScore(a: ScoredContract, b: ScoredContract): number {
@@ -202,17 +245,20 @@ function sessionDay(summary: OptionsSummary): string {
 
 export function analyzeSummary(summary: OptionsSummary, options: AnalyzeOptions = {}): FlowAnalysis {
   const day = sessionDay(summary);
+  const minOi = options.minOpenInterest ?? DEFAULT_MIN_OPEN_INTEREST;
   const scored = summary.contracts
     .filter(isUnusual)
     .map((contract) => ({ ...contract, score: scoreOf(contract) }))
     .sort(byScore);
-  const zeroDte = options.includeZeroDte ? [] : scored.filter((contract) => contract.expiry === day);
-  const qualifying = options.includeZeroDte ? scored : scored.filter((contract) => contract.expiry !== day);
+  const lowOi = scored.filter((contract) => contract.openInterest < minOi);
+  const eligible = scored.filter((contract) => contract.openInterest >= minOi);
+  const zeroDte = options.includeZeroDte ? [] : eligible.filter((contract) => contract.expiry === day);
+  const qualifying = options.includeZeroDte ? eligible : eligible.filter((contract) => contract.expiry !== day);
   const unusual = selectBalanced(qualifying);
 
   return flowAnalysisSchema.parse({
     unusual,
-    observations: buildObservations(unusual, qualifying, zeroDte, summary),
+    observations: buildObservations(unusual, qualifying, zeroDte.length, lowOi.length, minOi, summary, day),
     callPremium: sumPremium(qualifying, "call"),
     putPremium: sumPremium(qualifying, "put"),
     sampleSize: summary.contracts.length,
@@ -223,10 +269,13 @@ export function createAnalyzeFlowTool(options?: AnalyzeOptions): AgentTool {
   return {
     name: "analyzeFlow",
     description:
-      "根据期权摘要标出异常合约（成交量≥1000，且 Vol/OI≥2，或扫单且 Vol/OI≥1.5）。默认去掉当日到期。看涨、看跌各取最多 3 张，并给出恰好 3 条观察。把 fetchOptionsSummary 的返回值放在 summary 字段。",
+      "根据期权摘要标出异常合约（成交量≥1000，未平仓默认≥500，且 Vol/OI≥2，或扫单且 Vol/OI≥1.5）。默认去掉当日到期。看涨、看跌各取最多 3 张，并给出恰好 3 条观察。把 fetchOptionsSummary 的返回值放在 summary 字段。",
     parameters: inputSchema,
     jsonSchema,
     execute: async (input) =>
-      analyzeSummary(input.summary, { includeZeroDte: options?.includeZeroDte ?? readIncludeZeroDte() }),
+      analyzeSummary(input.summary, {
+        includeZeroDte: options?.includeZeroDte ?? readIncludeZeroDte(),
+        minOpenInterest: options?.minOpenInterest ?? readMinOpenInterest(process.env.MIN_OPEN_INTEREST),
+      }),
   };
 }

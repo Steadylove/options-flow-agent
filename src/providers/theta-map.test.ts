@@ -60,8 +60,11 @@ test("同一套异常规则能从 Theta 摘要写出简报", () => {
     ["TQQQ 2026-11-20 90C", "TQQQ 2026-10-16 80C"],
   );
   assert.equal(analysis.observations.length, 3);
-  assert.match(analysis.observations[0], /权利金净偏多/);
-  assert.match(analysis.observations[2], /TQQQ 2026-11-20 90C/);
+  assert.match(analysis.observations[0], /全部 2 张达标合约（看涨 2 张、看跌 0 张）/);
+  assert.match(analysis.observations[0], /张数与权利金都偏多/);
+  assert.match(analysis.observations[0], /全场：/);
+  assert.equal(analysis.observations[1].includes("最突出"), false);
+  assert.match(analysis.observations[2], /表内最突出的是 TQQQ 2026-11-20 90C/);
   assert.match(analysis.observations[2], /方向不明/);
   assert.match(analysis.observations[2], /不是扫单/);
 
@@ -507,30 +510,44 @@ test("实盘达标合约里看跌会进表，当日到期默认不排名", () =>
   assert.deepEqual(
     analysis.unusual.map((contract) => contract.contract),
     [
-      "TQQQ 2026-10-12 84C",
       "TQQQ 2026-10-09 83C",
       "TQQQ 2026-10-09 83P",
       "TQQQ 2026-10-16 82P",
       "TQQQ 2026-10-30 73P",
     ],
   );
+  assert.equal(
+    analysis.unusual.some((contract) => contract.contract === "TQQQ 2026-10-12 84C"),
+    false,
+  );
   assert.equal(analysis.callPremium > 0 && analysis.putPremium > 0, true);
-  assert.match(analysis.observations[0], /权利金净偏多/);
-  assert.match(analysis.observations[0], /全场成交看涨/);
-  assert.match(analysis.observations[0], /看跌 \$/);
-  assert.equal(analysis.observations[0].includes("看跌 $0"), false);
-  assert.match(analysis.observations[1], /当日到期合约达到阈值（看涨 5、看跌 3）/);
-  assert.match(analysis.observations[1], /TQQQ 2026-10-07 83P/);
-  assert.match(analysis.observations[1], /14,228/);
-  assert.match(analysis.observations[1], /6\.45/);
+  assert.match(analysis.observations[0], /全部 4 张达标合约（看涨 1 张、看跌 3 张）/);
+  assert.match(analysis.observations[0], /方向混杂/);
+  assert.match(analysis.observations[0], /看涨权利金全部来自 TQQQ 2026-10-09 83C/);
+  assert.match(analysis.observations[0], /全场含当日到期：/);
+  assert.match(analysis.observations[0], /不含当日到期：/);
+  assert.equal(analysis.observations[0].includes("净偏多"), false);
+  assert.match(analysis.observations[1], /表内 4 张，即全部达标合约/);
+  assert.match(analysis.observations[1], /另有 8 张当日到期达标，未进排名/);
+  assert.match(analysis.observations[1], /另有 1 张因未平仓低于 500 未入排名/);
+  assert.equal(analysis.observations[1].includes("最突出"), false);
+  assert.match(analysis.observations[2], /表内最突出的是 TQQQ 2026-10-09 83C/);
 
   const included = analyzeSummary(summary, { includeZeroDte: true });
+  assert.equal(included.unusual.length, 6);
+  assert.equal(included.unusual[0]?.contract, "TQQQ 2026-10-07 81C");
   assert.equal(
     included.unusual.some((contract) => contract.contract === "TQQQ 2026-10-07 83P"),
     true,
   );
-  assert.equal(included.unusual[0]?.contract, "TQQQ 2026-10-07 81C");
-  assert.equal(included.observations[1].includes("默认不参与排名"), false);
+  assert.match(included.observations[0], /全部 12 张达标合约（看涨 6 张、看跌 6 张）/);
+  assert.match(included.observations[0], /张数相当、权利金偏多/);
+  assert.match(included.observations[1], /表内 6 张，全部 12 张达标合约里只展示了这些/);
+  assert.equal(included.observations[1].includes("未进排名"), false);
+  assert.match(included.observations[1], /未平仓低于 500/);
+  assert.match(included.observations[2], /表内最突出的是 TQQQ 2026-10-07 81C/);
+  const tablePremium = included.unusual.reduce((sum, contract) => sum + contract.premium, 0);
+  assert.notEqual(tablePremium, included.callPremium + included.putPremium);
 
   const markdown = renderBrief({
     ticker: summary.ticker,
@@ -546,7 +563,8 @@ test("实盘达标合约里看跌会进表，当日到期默认不排名", () =>
   assert.match(markdown, /标的价格：83\.62（Yahoo 常规交易收盘 2026-10-07 16:00 ET）/);
   assert.match(markdown, /未平仓：当日起始值（前一交易日收盘后），不是盘中更新/);
   assert.match(markdown, /TQQQ 2026-10-09 83P/);
-  assert.equal(markdown.includes("TQQQ 2026-10-07 83P"), true);
+  assert.equal(markdown.includes("TQQQ 2026-10-07 83P"), false);
+  assert.match(markdown, /另有 8 张当日到期达标，未进排名/);
 });
 
 test("MockProvider 的 TQQQ 样本没有被 Theta 映射改动", async () => {

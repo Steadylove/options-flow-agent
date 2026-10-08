@@ -6,11 +6,14 @@ import { createWriteBriefTool } from "./writeBrief.js";
 
 export function createTools(
   provider: OptionsDataProvider,
-  options?: { includeZeroDte?: boolean },
+  options?: { includeZeroDte?: boolean; minOpenInterest?: number },
 ): AgentTool[] {
   return [
     createFetchOptionsSummaryTool(provider),
-    createAnalyzeFlowTool({ includeZeroDte: options?.includeZeroDte }),
+    createAnalyzeFlowTool({
+      includeZeroDte: options?.includeZeroDte,
+      minOpenInterest: options?.minOpenInterest,
+    }),
     createWriteBriefTool(),
   ];
 }
