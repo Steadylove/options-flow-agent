@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   fetchYahooQuote,
   formatEtClock,
+  formatEtStamp,
   parseThetaEod,
   parseYahooChart,
   readUnderlyingPriceSource,
@@ -25,11 +26,29 @@ const yahooPayload = {
   },
 };
 
+const yahooLive = JSON.parse(
+  readFileSync(
+    fileURLToPath(new URL("../providers/fixtures/live/yahoo_chart_tqqq.json", import.meta.url)),
+    "utf8",
+  ),
+) as unknown;
+
 test("Yahoo 图表解析出价格和美东时刻", () => {
   assert.equal(formatEtClock(1791403200), "16:00 ET");
-  const quote = parseYahooChart(yahooPayload);
-  assert.equal(quote.price, 83.62);
-  assert.equal(quote.note, "Yahoo 实时/延迟 16:00 ET");
+  assert.equal(formatEtStamp(1791403200), "2026-10-07 16:00 ET");
+  const close = parseYahooChart(yahooPayload);
+  assert.equal(close.price, 83.62);
+  assert.equal(close.note, "Yahoo 常规交易收盘 2026-10-07 16:00 ET");
+  const live = parseYahooChart(yahooLive);
+  assert.equal(live.price, 83.62);
+  assert.equal(live.note, "Yahoo 常规交易收盘 2026-10-07 16:00 ET");
+  const intraday = parseYahooChart({
+    chart: {
+      result: [{ meta: { regularMarketPrice: 83.1, regularMarketTime: 1791399600 } }],
+      error: null,
+    },
+  });
+  assert.equal(intraday.note, "Yahoo 盘中延迟 2026-10-07 15:00 ET");
   assert.throws(() => parseYahooChart({ chart: { result: [], error: { code: "Not Found" } } }), /无法识别/);
 });
 

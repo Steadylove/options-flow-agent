@@ -15,8 +15,7 @@ import type { OptionsDataProvider, OptionsSummary } from "./types.js";
  * 用 THETADATA_BASE_URL 覆盖基址。
  *
  * 认证发生在 Terminal 启动时（THETADATA_API_KEY，或邮箱/密码写入 Terminal 自己的 creds.txt）。
- * 本地 REST 按官方示例是不带 Authorization 的 GET。本进程只检查环境变量里有没有凭证，
- * 不会把密钥放进 URL，也不会写 creds.txt。
+ * 本地 REST 按官方示例是不带 Authorization 的 GET。本进程不要求这些密钥，也不会把它们放进 URL。
  *
  * Options Value 只拉 option ohlc、quote、open_interest。
  * 标的价默认走 Yahoo 图表，失败再用免费的 stock/history/eod。不请求付费的 stock snapshot。
@@ -45,26 +44,14 @@ export interface ThetaCredentials {
 
 export interface ThetaConfig {
   baseUrl: string;
-  credentials: ThetaCredentials;
+  credentials?: ThetaCredentials;
   env?: NodeJS.ProcessEnv;
 }
 
-export function missingThetaCredentialsMessage(): string {
-  return [
-    "已选择 ThetaData（OPTIONS_DATA_PROVIDER=theta），但没有凭证。",
-    "在 .env 里设置 THETADATA_API_KEY（门户里的 API key），或同时设置 THETADATA_USERNAME 与 THETADATA_PASSWORD（账号邮箱和密码）。",
-    "不要把密钥提交进仓库。本程序不会代写 creds.txt。",
-    `然后启动 Theta Terminal v3，再请求 ${DEFAULT_THETADATA_BASE_URL}（可用 THETADATA_BASE_URL 覆盖）。`,
-    "没有订阅时请把 OPTIONS_DATA_PROVIDER 留空或设为 mock。这里不会自动退回 Mock。",
-  ].join("\n");
-}
-
 export function readThetaConfig(env: NodeJS.ProcessEnv = process.env): ThetaConfig {
-  const credentials = readCredentials(env);
-  assertThetaCredentials(credentials);
   return {
     baseUrl: normalizeBaseUrl(env.THETADATA_BASE_URL),
-    credentials,
+    credentials: readCredentials(env),
     env,
   };
 }
@@ -86,7 +73,6 @@ export class ThetaProvider implements OptionsDataProvider {
   private readonly env: NodeJS.ProcessEnv;
 
   constructor(config: ThetaConfig, fetchImpl: ThetaFetch = fetch) {
-    assertThetaCredentials(config.credentials);
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
     this.fetchImpl = fetchImpl;
     this.env = config.env ?? process.env;
@@ -178,11 +164,6 @@ function readCredentials(env: NodeJS.ProcessEnv): ThetaCredentials {
     );
   }
   return { apiKey, username, password };
-}
-
-function assertThetaCredentials(credentials: ThetaCredentials): void {
-  if (credentials.apiKey || (credentials.username && credentials.password)) return;
-  throw new Error(missingThetaCredentialsMessage());
 }
 
 function formatCompactDate(date: Date): string {

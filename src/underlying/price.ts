@@ -10,6 +10,11 @@ export interface UnderlyingQuote {
 
 const YAHOO_HOSTS = ["https://query1.finance.yahoo.com", "https://query2.finance.yahoo.com"];
 
+const tradingPeriodSchema = z.object({
+  start: z.number(),
+  end: z.number(),
+});
+
 const yahooChartSchema = z.object({
   chart: z.object({
     result: z
@@ -18,6 +23,14 @@ const yahooChartSchema = z.object({
           meta: z.object({
             regularMarketPrice: z.number().positive(),
             regularMarketTime: z.number().int().positive(),
+            currentTradingPeriod: z
+              .object({
+                pre: tradingPeriodSchema.optional(),
+                regular: tradingPeriodSchema.optional(),
+                post: tradingPeriodSchema.optional(),
+              })
+              .optional(),
+            tradingPeriods: z.array(z.array(tradingPeriodSchema)).optional(),
           }),
         }),
       )
@@ -51,7 +64,7 @@ export function parseYahooChart(payload: unknown): UnderlyingQuote {
   if (!meta) throw new Error("Yahoo 图表响应形状无法识别。");
   return {
     price: meta.regularMarketPrice,
-    note: `Yahoo 实时/延迟 ${formatEtClock(meta.regularMarketTime)}`,
+    note: `Yahoo ${yahooSessionKind(meta)} ${formatEtStamp(meta.regularMarketTime)}`,
   };
 }
 
@@ -100,10 +113,13 @@ export function parseThetaEod(payload: unknown): UnderlyingQuote {
   return { price: latest.close, note: `Theta 日线收盘 ${day}` };
 }
 
-export function formatEtClock(unixSeconds: number): string {
+export function formatEtParts(unixSeconds: number): { date: string; time: string } {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
       hourCycle: "h23",
@@ -113,7 +129,43 @@ export function formatEtClock(unixSeconds: number): string {
   );
   const hour = (parts.hour ?? "00").padStart(2, "0");
   const minute = (parts.minute ?? "00").padStart(2, "0");
-  return `${hour}:${minute} ET`;
+  const month = (parts.month ?? "01").padStart(2, "0");
+  const day = (parts.day ?? "01").padStart(2, "0");
+  return { date: `${parts.year}-${month}-${day}`, time: `${hour}:${minute}` };
+}
+
+export function formatEtClock(unixSeconds: number): string {
+  return `${formatEtParts(unixSeconds).time} ET`;
+}
+
+export function formatEtStamp(unixSeconds: number): string {
+  const parts = formatEtParts(unixSeconds);
+  return `${parts.date} ${parts.time} ET`;
+}
+
+function yahooSessionKind(meta: {
+  regularMarketTime: number;
+  currentTradingPeriod?: {
+    pre?: { start: number; end: number };
+    regular?: { start: number; end: number };
+    post?: { start: number; end: number };
+  };
+  tradingPeriods?: { start: number; end: number }[][];
+}): string {
+  const time = meta.regularMarketTime;
+  const chartPeriod = meta.tradingPeriods?.flat().find((period) => time >= period.start && time <= period.end);
+  if (chartPeriod) return time >= chartPeriod.end ? "常规交易收盘" : "盘中延迟";
+  const current = meta.currentTradingPeriod;
+  if (current?.regular && time >= current.regular.start && time <= current.regular.end) {
+    return time >= current.regular.end ? "常规交易收盘" : "盘中延迟";
+  }
+  if (current?.pre && time >= current.pre.start && time < current.pre.end) return "盘前";
+  if (current?.post && time >= current.post.start && time < current.post.end) return "盘后";
+  const clock = formatEtParts(time).time;
+  if (clock === "16:00") return "常规交易收盘";
+  if (clock > "16:00") return "盘后";
+  if (clock < "09:30") return "盘前";
+  return "盘中延迟";
 }
 
 function eodSortKey(row: { last_trade?: string; created?: string }): string {

@@ -13,6 +13,7 @@ import {
 import { MockProvider } from "./mock.js";
 import {
   DEFAULT_THETADATA_BASE_URL,
+  readThetaConfig,
   ThetaProvider,
   type ThetaFetch,
 } from "./theta.js";
@@ -141,11 +142,16 @@ test("响应形状不对或连不上 Terminal 时失败，且不请求 Mock", as
   assert.ok(calls > 0);
 
   calls = 0;
-  assert.throws(
-    () => new ThetaProvider({ baseUrl: DEFAULT_THETADATA_BASE_URL, credentials: {} }, fetchImpl),
-    /没有凭证/,
+  const unsigned = new ThetaProvider(
+    { baseUrl: DEFAULT_THETADATA_BASE_URL, credentials: {} },
+    fetchImpl,
   );
-  assert.equal(calls, 0);
+  await assert.rejects(unsigned.fetchSummary("TQQQ"), /无法连接 ThetaData REST/);
+  assert.ok(calls > 0);
+  assert.throws(
+    () => readThetaConfig({ THETADATA_USERNAME: "person@example.com" }),
+    /一起设置/,
+  );
 });
 
 test("ThetaProvider 用 Value 档快照，不调用 trade", async () => {
@@ -186,7 +192,7 @@ test("ThetaProvider 用 Value 档快照，不调用 trade", async () => {
   const summary = await provider.fetchSummary("TQQQ");
   assert.equal(summary.contracts.length, 4);
   assert.equal(summary.underlyingPrice, 83.62);
-  assert.equal(summary.underlyingPriceNote, "Yahoo 实时/延迟 16:00 ET");
+  assert.equal(summary.underlyingPriceNote, "Yahoo 常规交易收盘 2026-10-07 16:00 ET");
   assert.equal(urls.some((url) => url.includes("/option/snapshot/trade")), false);
   assert.equal(urls.some((url) => url.includes("/stock/snapshot/")), false);
   assert.equal(urls.some((url) => url.includes("/stock/history/eod")), false);
@@ -486,6 +492,62 @@ function jsonResponse(body: unknown): Response {
     headers: { "content-type": "application/json" },
   });
 }
+
+test("实盘达标合约里看跌会进表，当日到期默认不排名", () => {
+  const summary = mapThetaSnapshots({
+    ticker: "TQQQ",
+    ohlc: readLiveJson("ranked_ohlc.json"),
+    quote: readLiveJson("ranked_quote.json"),
+    openInterest: readLiveJson("ranked_open_interest.json"),
+    underlyingPrice: 83.62,
+    underlyingPriceNote: "Yahoo 常规交易收盘 2026-10-07 16:00 ET",
+  });
+  assert.equal(summary.contracts.length, 13);
+  const analysis = analyzeSummary(summary);
+  assert.deepEqual(
+    analysis.unusual.map((contract) => contract.contract),
+    [
+      "TQQQ 2026-10-12 84C",
+      "TQQQ 2026-10-09 83C",
+      "TQQQ 2026-10-09 83P",
+      "TQQQ 2026-10-16 82P",
+      "TQQQ 2026-10-30 73P",
+    ],
+  );
+  assert.equal(analysis.callPremium > 0 && analysis.putPremium > 0, true);
+  assert.match(analysis.observations[0], /权利金净偏多/);
+  assert.match(analysis.observations[0], /全场成交看涨/);
+  assert.match(analysis.observations[0], /看跌 \$/);
+  assert.equal(analysis.observations[0].includes("看跌 $0"), false);
+  assert.match(analysis.observations[1], /当日到期合约达到阈值（看涨 5、看跌 3）/);
+  assert.match(analysis.observations[1], /TQQQ 2026-10-07 83P/);
+  assert.match(analysis.observations[1], /14,228/);
+  assert.match(analysis.observations[1], /6\.45/);
+
+  const included = analyzeSummary(summary, { includeZeroDte: true });
+  assert.equal(
+    included.unusual.some((contract) => contract.contract === "TQQQ 2026-10-07 83P"),
+    true,
+  );
+  assert.equal(included.unusual[0]?.contract, "TQQQ 2026-10-07 81C");
+  assert.equal(included.observations[1].includes("默认不参与排名"), false);
+
+  const markdown = renderBrief({
+    ticker: summary.ticker,
+    window: summary.window,
+    asOf: summary.asOf,
+    underlyingPrice: summary.underlyingPrice,
+    underlyingPriceNote: summary.underlyingPriceNote,
+    source: summary.source,
+    unusual: analysis.unusual,
+    observations: analysis.observations,
+    sampleSize: analysis.sampleSize,
+  });
+  assert.match(markdown, /标的价格：83\.62（Yahoo 常规交易收盘 2026-10-07 16:00 ET）/);
+  assert.match(markdown, /未平仓：当日起始值（前一交易日收盘后），不是盘中更新/);
+  assert.match(markdown, /TQQQ 2026-10-09 83P/);
+  assert.equal(markdown.includes("TQQQ 2026-10-07 83P"), true);
+});
 
 test("MockProvider 的 TQQQ 样本没有被 Theta 映射改动", async () => {
   const summary = await new MockProvider().fetchSummary("TQQQ");

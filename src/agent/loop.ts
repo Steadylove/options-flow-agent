@@ -44,9 +44,12 @@ export interface AgentResult {
   provider: string;
 }
 
-export async function runAgent(options: { ticker: string }): Promise<AgentResult> {
+export async function runAgent(options: {
+  ticker: string;
+  includeZeroDte?: boolean;
+}): Promise<AgentResult> {
   const provider = createOptionsDataProvider();
-  const tools = createTools(provider);
+  const tools = createTools(provider, { includeZeroDte: options.includeZeroDte });
   const apiKey = process.env.LITELLM_API_KEY?.trim();
   if (!apiKey) {
     return { ...(await runDeterministic(tools, options.ticker)), provider: provider.name };

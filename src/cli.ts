@@ -1,21 +1,26 @@
 import { runAgent, type AgentResult } from "./agent/loop.js";
 import { loadDotEnv } from "./env.js";
 import { normalizeTicker } from "./ticker.js";
+import { readIncludeZeroDte } from "./tools/analyzeFlow.js";
 
-const USAGE = `用法：pnpm brief --ticker TQQQ
+const USAGE = `用法：pnpm brief --ticker TQQQ [--include-0dte]
 
 默认 OPTIONS_DATA_PROVIDER=mock：从 MockProvider 读取样本，写出 output/<TICKER>-options-brief.md。
 未设置 LITELLM_API_KEY 时按固定顺序调用三个 tool，不访问网络。
-OPTIONS_DATA_PROVIDER=theta 时改用 ThetaData；没有凭证会直接失败，不会退回 mock。`;
+OPTIONS_DATA_PROVIDER=theta 时改用 ThetaData。凭证放在 Theta Terminal 里，本进程不发送密钥。
+连不上 Terminal 会直接失败，不会退回 mock。
+默认不把当日到期合约放进异常排名。--include-0dte 或 INCLUDE_0DTE=1 可纳入。`;
 
 interface CliArgs {
   help: boolean;
   ticker?: string;
+  includeZeroDte: boolean;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
+  const includeZeroDte = argv.includes("--include-0dte");
   if (argv.includes("--help") || argv.includes("-h")) {
-    return { help: true };
+    return { help: true, includeZeroDte };
   }
 
   let raw: string | undefined;
@@ -35,7 +40,7 @@ export function parseArgs(argv: string[]): CliArgs {
     throw new Error(`缺少 --ticker。\n${USAGE}`);
   }
 
-  return { help: false, ticker: normalizeTicker(raw) };
+  return { help: false, ticker: normalizeTicker(raw), includeZeroDte };
 }
 
 function formatMode(result: AgentResult): string {
@@ -53,7 +58,10 @@ async function main(): Promise<void> {
     return;
   }
 
-  const result = await runAgent({ ticker: args.ticker });
+  const result = await runAgent({
+    ticker: args.ticker,
+    includeZeroDte: args.includeZeroDte || readIncludeZeroDte(),
+  });
   console.log(`模式：${formatMode(result)}`);
   console.log(`已写入 ${result.outputPath}`);
 }
