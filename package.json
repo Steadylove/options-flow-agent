@@ -9,7 +9,8 @@
   },
   "scripts": {
     "brief": "tsx src/cli.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/providers/*.test.ts"
   },
   "dependencies": {
     "tsx": "^4.20.5",

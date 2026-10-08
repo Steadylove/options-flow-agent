@@ -70,6 +70,9 @@ function sideLabel(side: ScoredContract["side"]): string {
 
 function sourceLabel(source: string): string {
   if (source === "mock") return "MockProvider（固定样本，非实盘行情）";
+  if (source === "theta") {
+    return "ThetaData Options Value（ohlc / quote / open interest 快照，约 15 分钟延迟；扫单与希腊值不在该档）";
+  }
   return source;
 }
 
