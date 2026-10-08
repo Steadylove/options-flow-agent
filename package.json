@@ -10,7 +10,7 @@
   "scripts": {
     "brief": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/providers/*.test.ts"
+    "test": "tsx --test src/providers/*.test.ts src/underlying/*.test.ts"
   },
   "dependencies": {
     "tsx": "^4.20.5",

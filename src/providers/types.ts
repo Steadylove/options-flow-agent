@@ -26,6 +26,7 @@ export const optionsSummarySchema = z.object({
   asOf: z.string().datetime(),
   window: z.string().min(1),
   underlyingPrice: z.number().positive(),
+  underlyingPriceNote: z.string().min(1).optional(),
   source: z.enum(["mock", "theta"]),
   contracts: z.array(optionContractSchema).min(1),
 });

@@ -12,6 +12,7 @@ export const writeBriefInputSchema = z.object({
   asOf: z.string().min(1),
   underlyingPrice: z.number().positive(),
   source: z.string().min(1),
+  underlyingPriceNote: z.string().min(1).optional(),
   unusual: z.array(scoredContractSchema),
   observations: flowAnalysisSchema.shape.observations,
   sampleSize: z.number().int().nonnegative().optional(),
@@ -33,6 +34,7 @@ const jsonSchema: Record<string, unknown> = {
     asOf: { type: "string" },
     underlyingPrice: { type: "number" },
     source: { type: "string" },
+    underlyingPriceNote: { type: "string", description: "标的价来源与时间，例如 Yahoo 常规交易收盘 2026-10-07 16:00 ET" },
     unusual: {
       type: "array",
       description: "analyzeFlow 返回的 unusual 数组",
@@ -89,6 +91,13 @@ export function renderBrief(input: WriteBriefInput): string {
 
   const sampleLine =
     input.sampleSize === undefined ? "" : `\n- 样本合约数：${fmtInt(input.sampleSize)}`;
+  const priceLine = input.underlyingPriceNote
+    ? `- 标的价格：${fmtPx(input.underlyingPrice)}（${input.underlyingPriceNote}）`
+    : `- 标的价格：${fmtPx(input.underlyingPrice)}`;
+  const openInterestLine =
+    input.source === "theta"
+      ? "\n- 未平仓：当日起始值（前一交易日收盘后），不是盘中更新"
+      : "";
 
   return `# ${input.ticker} 期权流研究简报
 
@@ -97,8 +106,8 @@ export function renderBrief(input: WriteBriefInput): string {
 - 标的：${input.ticker}
 - 时间窗：${input.window}
 - 截止时间：${input.asOf}
-- 标的价格：${fmtPx(input.underlyingPrice)}
-- 数据来源：${sourceLabel(input.source)}${sampleLine}
+${priceLine}
+- 数据来源：${sourceLabel(input.source)}${openInterestLine}${sampleLine}
 
 ## 异常合约表
 

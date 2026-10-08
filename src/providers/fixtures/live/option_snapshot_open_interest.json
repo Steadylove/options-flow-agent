@@ -1,0 +1,46 @@
+{
+ "response": [
+  {
+   "contract": {
+    "strike": 65.0,
+    "right": "PUT",
+    "expiration": "2026-10-12",
+    "symbol": "TQQQ"
+   },
+   "data": [
+    {
+     "open_interest": 7,
+     "timestamp": "2026-10-07T06:30:01.950"
+    }
+   ]
+  },
+  {
+   "contract": {
+    "strike": 81.0,
+    "right": "PUT",
+    "expiration": "2026-10-12",
+    "symbol": "TQQQ"
+   },
+   "data": [
+    {
+     "open_interest": 353,
+     "timestamp": "2026-10-07T06:30:01.964"
+    }
+   ]
+  },
+  {
+   "contract": {
+    "strike": 81.0,
+    "right": "CALL",
+    "expiration": "2026-10-12",
+    "symbol": "TQQQ"
+   },
+   "data": [
+    {
+     "open_interest": 126,
+     "timestamp": "2026-10-07T06:30:01.433"
+    }
+   ]
+  }
+ ]
+}

@@ -44,9 +44,12 @@ export interface AgentResult {
   provider: string;
 }
 
-export async function runAgent(options: { ticker: string }): Promise<AgentResult> {
+export async function runAgent(options: {
+  ticker: string;
+  includeZeroDte?: boolean;
+}): Promise<AgentResult> {
   const provider = createOptionsDataProvider();
-  const tools = createTools(provider);
+  const tools = createTools(provider, { includeZeroDte: options.includeZeroDte });
   const apiKey = process.env.LITELLM_API_KEY?.trim();
   if (!apiKey) {
     return { ...(await runDeterministic(tools, options.ticker)), provider: provider.name };
@@ -70,6 +73,7 @@ async function runDeterministic(
       window: summary.window,
       asOf: summary.asOf,
       underlyingPrice: summary.underlyingPrice,
+      underlyingPriceNote: summary.underlyingPriceNote,
       source: summary.source,
       unusual: analysis.unusual,
       observations: analysis.observations,
@@ -102,7 +106,7 @@ async function runLlm(
         "按顺序调用：",
         "1. fetchOptionsSummary，参数 { ticker }",
         "2. analyzeFlow，把上一步返回值原样放进 summary",
-        "3. writeBrief，使用 summary 的 ticker、window、asOf、underlyingPrice、source，以及 analyzeFlow 的 unusual、observations、sampleSize",
+        "3. writeBrief，使用 summary 的 ticker、window、asOf、underlyingPrice、underlyingPriceNote、source，以及 analyzeFlow 的 unusual、observations、sampleSize",
         "writeBrief 成功后停止。",
       ].join("\n"),
     },

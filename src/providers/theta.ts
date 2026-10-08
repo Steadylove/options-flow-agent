@@ -1,4 +1,10 @@
 import { normalizeTicker } from "../ticker.js";
+import {
+  fetchYahooQuote,
+  parseThetaEod,
+  readUnderlyingPriceSource,
+  type UnderlyingQuote,
+} from "../underlying/price.js";
 import { mapThetaSnapshots } from "./theta-map.js";
 import type { OptionsDataProvider, OptionsSummary } from "./types.js";
 
@@ -9,10 +15,10 @@ import type { OptionsDataProvider, OptionsSummary } from "./types.js";
  * 用 THETADATA_BASE_URL 覆盖基址。
  *
  * 认证发生在 Terminal 启动时（THETADATA_API_KEY，或邮箱/密码写入 Terminal 自己的 creds.txt）。
- * 本地 REST 按官方示例是不带 Authorization 的 GET。本进程只检查环境变量里有没有凭证，
- * 不会把密钥放进 URL，也不会写 creds.txt。
+ * 本地 REST 按官方示例是不带 Authorization 的 GET。本进程不要求这些密钥，也不会把它们放进 URL。
  *
- * Options Value 档位用来拼简报的快照：option ohlc、quote、open_interest，以及 stock ohlc（标的价）。
+ * Options Value 只拉 option ohlc、quote、open_interest。
+ * 标的价默认走 Yahoo 图表，失败再用免费的 stock/history/eod。不请求付费的 stock snapshot。
  * trade、implied volatility、greeks 是更高档，这里不调用。
  * 映射在 theta-map.ts。连不上或形状不符时直接失败，不退回 Mock。
  */
@@ -26,7 +32,7 @@ const VALUE_SNAPSHOT_PATHS = {
 
 export type ThetaSnapshotKind = keyof typeof VALUE_SNAPSHOT_PATHS;
 
-const STOCK_OHLC_PATH = "/stock/snapshot/ohlc";
+const STOCK_EOD_PATH = "/stock/history/eod";
 
 export type ThetaFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -38,25 +44,15 @@ export interface ThetaCredentials {
 
 export interface ThetaConfig {
   baseUrl: string;
-  credentials: ThetaCredentials;
-}
-
-export function missingThetaCredentialsMessage(): string {
-  return [
-    "已选择 ThetaData（OPTIONS_DATA_PROVIDER=theta），但没有凭证。",
-    "在 .env 里设置 THETADATA_API_KEY（门户里的 API key），或同时设置 THETADATA_USERNAME 与 THETADATA_PASSWORD（账号邮箱和密码）。",
-    "不要把密钥提交进仓库。本程序不会代写 creds.txt。",
-    `然后启动 Theta Terminal v3，再请求 ${DEFAULT_THETADATA_BASE_URL}（可用 THETADATA_BASE_URL 覆盖）。`,
-    "没有订阅时请把 OPTIONS_DATA_PROVIDER 留空或设为 mock。这里不会自动退回 Mock。",
-  ].join("\n");
+  credentials?: ThetaCredentials;
+  env?: NodeJS.ProcessEnv;
 }
 
 export function readThetaConfig(env: NodeJS.ProcessEnv = process.env): ThetaConfig {
-  const credentials = readCredentials(env);
-  assertThetaCredentials(credentials);
   return {
     baseUrl: normalizeBaseUrl(env.THETADATA_BASE_URL),
-    credentials,
+    credentials: readCredentials(env),
+    env,
   };
 }
 
@@ -74,30 +70,63 @@ export class ThetaProvider implements OptionsDataProvider {
   readonly name = "theta";
   private readonly baseUrl: string;
   private readonly fetchImpl: ThetaFetch;
+  private readonly env: NodeJS.ProcessEnv;
 
   constructor(config: ThetaConfig, fetchImpl: ThetaFetch = fetch) {
-    assertThetaCredentials(config.credentials);
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
     this.fetchImpl = fetchImpl;
+    this.env = config.env ?? process.env;
   }
 
   async fetchSummary(ticker: string): Promise<OptionsSummary> {
     const symbol = normalizeTicker(ticker);
+    const priceSource = readUnderlyingPriceSource(this.env.UNDERLYING_PRICE_SOURCE);
     const [ohlc, quote] = await Promise.all([
       this.getSnapshot("ohlc", symbol),
       this.getSnapshot("quote", symbol),
     ]);
-    const [openInterest, underlying] = await Promise.all([
-      this.getSnapshot("openInterest", symbol),
-      this.getText(STOCK_OHLC_PATH, { symbol, format: "json" }),
-    ]);
+    const openInterest = await this.getSnapshot("openInterest", symbol);
+    const underlying = await this.loadUnderlying(symbol, priceSource);
     return mapThetaSnapshots({
       ticker: symbol,
       ohlc: parseJson(ohlc, VALUE_SNAPSHOT_PATHS.ohlc),
       quote: parseJson(quote, VALUE_SNAPSHOT_PATHS.quote),
       openInterest: parseJson(openInterest, VALUE_SNAPSHOT_PATHS.openInterest),
-      underlying: parseJson(underlying, STOCK_OHLC_PATH),
+      underlyingPrice: underlying.price,
+      underlyingPriceNote: underlying.note,
     });
+  }
+
+  private async loadUnderlying(
+    symbol: string,
+    source: "yahoo" | "theta-eod",
+  ): Promise<UnderlyingQuote> {
+    const errors: string[] = [];
+    if (source === "yahoo") {
+      try {
+        return await fetchYahooQuote(symbol, this.fetchImpl);
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+    try {
+      return await this.fetchThetaEod(symbol);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+    throw new Error(`标的价格获取失败，不会改用 Mock。\n${errors.join("\n")}`);
+  }
+
+  private async fetchThetaEod(symbol: string): Promise<UnderlyingQuote> {
+    const end = new Date();
+    const start = new Date(end.getTime() - 14 * 24 * 60 * 60 * 1000);
+    const body = await this.getText(STOCK_EOD_PATH, {
+      symbol,
+      start_date: formatCompactDate(start),
+      end_date: formatCompactDate(end),
+      format: "json",
+    });
+    return parseThetaEod(parseJson(body, STOCK_EOD_PATH));
   }
 
   async getSnapshot(kind: ThetaSnapshotKind, symbol: string): Promise<string> {
@@ -137,9 +166,15 @@ function readCredentials(env: NodeJS.ProcessEnv): ThetaCredentials {
   return { apiKey, username, password };
 }
 
-function assertThetaCredentials(credentials: ThetaCredentials): void {
-  if (credentials.apiKey || (credentials.username && credentials.password)) return;
-  throw new Error(missingThetaCredentialsMessage());
+function formatCompactDate(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+    .format(date)
+    .replaceAll("-", "");
 }
 
 function parseJson(body: string, endpoint: string): unknown {

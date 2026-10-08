@@ -4,10 +4,13 @@ import { createFetchOptionsSummaryTool } from "./fetchOptionsSummary.js";
 import type { AgentTool } from "./types.js";
 import { createWriteBriefTool } from "./writeBrief.js";
 
-export function createTools(provider: OptionsDataProvider): AgentTool[] {
+export function createTools(
+  provider: OptionsDataProvider,
+  options?: { includeZeroDte?: boolean },
+): AgentTool[] {
   return [
     createFetchOptionsSummaryTool(provider),
-    createAnalyzeFlowTool(),
+    createAnalyzeFlowTool({ includeZeroDte: options?.includeZeroDte }),
     createWriteBriefTool(),
   ];
 }
